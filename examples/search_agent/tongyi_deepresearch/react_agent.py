@@ -16,15 +16,15 @@ from areal.utils import logging
 
 try:
     from .prompt import SYSTEM_PROMPT
-    from .tool_search import Search
-    from .tool_visit import Visit
+    from .tool_search import GetAllCircuitSummaries
+    from .tool_visit import GetCircuitSpecsByName
 except ImportError:  # Fallback when executed directly (no package parent known)
     module_dir = Path(__file__).parent
     if str(module_dir) not in sys.path:
         sys.path.insert(0, str(module_dir))
     from prompt import SYSTEM_PROMPT
-    from tool_search import Search
-    from tool_visit import Visit
+    from tool_search import GetAllCircuitSummaries
+    from tool_visit import GetCircuitSpecsByName
 
 
 logger = logging.getLogger("Tongyi-DeepResearch react agent")
@@ -35,33 +35,6 @@ OBS_END = "\n</tool_response>"
 MAX_LLM_CALL_PER_RUN = int(os.getenv("MAX_LLM_CALL_PER_RUN", 100))
 
 
-def today_date():
-    return datetime.date.today().strftime("%Y-%m-%d")
-
-
-def parse_judge_result(raw_response):
-    # parse results
-    import ast
-    import json
-
-    mbe = None
-    for parse_fn in [json.loads, ast.literal_eval]:
-        try:
-            mbe = parse_fn(raw_response.split("```json")[-1].split("```")[0].strip())
-            break
-        except Exception:
-            logger.warning(f"Error parsing judge result with {parse_fn}.")
-    if mbe is None and '"judgement": "incorrect"' in raw_response:
-        mbe = dict(judgement="incorrect")
-    if mbe is None and '"judgement": "correct"' in raw_response:
-        mbe = dict(judgement="correct")
-    if mbe is None:
-        logger.warning(f"Unknown judge result. Raw response: {raw_response}")
-        mbe = dict(judgement="unknown")
-    score = float("judgement" in mbe and mbe["judgement"] == "correct")
-    return score
-
-
 class MultiTurnReactAgent(FnCallAgent):
     def __init__(
         self,
@@ -69,15 +42,13 @@ class MultiTurnReactAgent(FnCallAgent):
         max_tokens_per_turn: int = 10000,
         max_llm_calls_per_run: int = 100,
         max_total_tokens: int = 32768,
-        judge_client: ArealOpenAI | None = None,
     ):
         self.tokenizer = tokenizer
         self.max_tokens_per_turn = max_tokens_per_turn
         self.max_llm_calls_per_run = max_llm_calls_per_run
         self.max_total_tokens = max_total_tokens
         self.max_total_tokens_before_finishing = int(max_total_tokens * 0.8)
-        self.judge_client = judge_client
-        self.tool_class = [Visit(summary_client=self.judge_client), Search()]
+        self.tool_class = [GetCircuitSpecsByName(), GetAllCircuitSummaries()]
         self.tool_map = {tool.name: tool for tool in self.tool_class}
 
     def count_tokens(self, messages):
@@ -126,8 +97,6 @@ class MultiTurnReactAgent(FnCallAgent):
         answer = data["answer"]
         self.user_prompt = question
         system_prompt = SYSTEM_PROMPT
-        cur_date = today_date()
-        system_prompt = system_prompt + str(cur_date)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
@@ -160,6 +129,10 @@ class MultiTurnReactAgent(FnCallAgent):
             content = message.content
             completions.append(completion)
             messages.append(message)
+            # print('>' * 100)
+            # print(stats)
+            # print(content)
+            # print('<' * 100)
             if "<tool_call>" in content and "</tool_call>" in content:
                 tool_call = content.split("<tool_call>")[1].split("</tool_call>")[0]
                 try:
@@ -167,9 +140,9 @@ class MultiTurnReactAgent(FnCallAgent):
                     tool_name = tool_call["name"]
                     tool_args = tool_call.get("arguments", {})
                     result = await self.custom_call_tool(tool_name, tool_args)
-                    if tool_name == "search":
+                    if tool_name == "get_all_circuit_summaries":
                         stats["num_search"] += 1
-                    elif tool_name == "visit":
+                    elif tool_name == "get_circuit_specs_by_name":
                         stats["num_access"] += 1
                 except Exception as e:
                     result = f'Error: {e} Tool call must be a valid json contain a valid "name" and "arguments" field.'
@@ -264,8 +237,7 @@ class MultiTurnReactAgent(FnCallAgent):
 
     async def custom_call_tool(self, tool_name: str, tool_args: dict, **kwargs):
         if tool_name in self.tool_map:
-            tool_args["params"] = tool_args
-            raw_result = await self.tool_map[tool_name].call(tool_args, **kwargs)
+            raw_result = self.tool_map[tool_name].call(**tool_args)
             result = raw_result
             return result
         else:
@@ -275,44 +247,14 @@ class MultiTurnReactAgent(FnCallAgent):
         self,
         result: dict[str, str],
     ):
-        # Compute reward with LLM-as-Judge
-        # judge_client = ArealOpenAI(engine=rollout_engine, tokenizer=tokenizer)
-        judge_prompt_template = (
-            "You are an evaluation assistant. Please determine if the predicted answer is equivalent to the labeled answer.\n"
-            "You should first give your rationale for the judgement, and then give your judgement result (i.e., correct or incorrect).\n\n"
-            "\n"
-            "question: {question}\n"
-            "ground truth answers: {gt_answer}\n"
-            "pred_answer: {pred_answer}\n\n"
-            "Did the model give an answer **equivalent** to the labeled answer? \n\nThe output should in the following json format:\n"
-            "```json\n"
-            "{{\n"
-            """    "rationale": "your rationale for the judgement, as a text",\n"""
-            """    "judgement": "your judgement result, can only be 'correct' or 'incorrect'\n"""
-            "}}\n"
-            "```\n"
-            "Your output:"
-        )
-        pred_answer = result["prediction"]
-        ground_truth = result["answer"]
-        if isinstance(ground_truth, list) and len(ground_truth) == 1:
-            ground_truth = str(ground_truth[0])
-        judge_prompt = judge_prompt_template.format(
-            question=result["question"],
-            gt_answer=str(ground_truth),
-            pred_answer=pred_answer[:200],
-        )
-        try:
-            judge_completion = await self.judge_client.chat.completions.create(
-                messages=[{"role": "user", "content": judge_prompt}],
-                temperature=1.0,
-                max_completion_tokens=8192,
-                store=False,
-            )
-            judge_response = judge_completion.choices[0].message.content
-            reward = parse_judge_result(judge_response)
-        except Exception as e:
-            logger.warning(f"Error in calling LLM judge: {e}")
+        pred_answer = result["prediction"].strip()
+        ground_truth = result["answer"].strip()
+        if pred_answer == ground_truth:
+            reward = 1.0
+            print('>' * 100)
+            print(f"reward: {reward}")
+            print('<' * 100)
+        else:
             reward = 0.0
         return reward
 
