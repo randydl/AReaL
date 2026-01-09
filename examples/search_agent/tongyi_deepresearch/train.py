@@ -68,13 +68,11 @@ class TongyiDeepResearchReactWorkflow(RolloutWorkflow):
             self.judge_engine.initialize()
             self._owns_judge_engine = True
 
-        self.judge_client = ArealOpenAI(engine=self.judge_engine, tokenizer=tokenizer)
         self.agent = MultiTurnReactAgent(
             tokenizer=self.tokenizer,
             max_tokens_per_turn=self.gconfig.max_new_tokens,
             max_llm_calls_per_run=max_llm_calls_per_run,
             max_total_tokens=max_tokens,
-            judge_client=self.judge_client,
         )
 
     def __del__(self):

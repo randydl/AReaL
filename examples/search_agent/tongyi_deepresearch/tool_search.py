@@ -1,107 +1,63 @@
-import asyncio
-import json
-import os
-
-import aiohttp
+import pymysql
+from typing import Type, List, Tuple, Dict
+from pydantic import BaseModel, Field
 from qwen_agent.tools.base import BaseTool, register_tool
+import sys
+import os
+import json
 
-SERPER_KEY = os.environ.get("SERPER_KEY_ID")
+
+DB_CONFIG = {
+    "host": '10.239.2.30',
+    "user": 'topology_access',
+    "password": 'TOpo%%14gy',
+    "database": 'circuits',
+    "table_name": 'circuit_info_cxmt'
+}
+# Database connection details
+HOST = DB_CONFIG['host']
+USER = DB_CONFIG['user']
+PASSWORD = DB_CONFIG['password']
+DATABASE = DB_CONFIG['database']
+TABLE_NAME = DB_CONFIG['table_name']
 
 
-@register_tool("search", allow_overwrite=True)
-class Search(BaseTool):
-    name = "search"
-    description = "Performs batched web searches: supply an array 'query'; the tool retrieves the top 10 results for each query in one call."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Array of query strings. Include multiple complementary search queries in a single call.",
-            },
-        },
-        "required": ["query"],
-    }
+class GetAllCircuitSummaries():
+    name: str = "get_all_circuit_summaries"
+    description: str = (
+        "Retrieve the name and description of all circuits."
+    )
 
-    def __init__(self, cfg: dict | None = None):
-        super().__init__(cfg)
+    def call(self) -> List[Tuple[str, str]]:
+        """Perform circuit information query.
 
-    async def google_search_with_serp(self, query: str):
-        def contains_chinese_basic(text: str) -> bool:
-            return any("\u4e00" <= char <= "\u9fff" for char in text)
-
-        if contains_chinese_basic(query):
-            payload = {"q": query, "location": "China", "gl": "cn", "hl": "zh-cn"}
-        else:
-            payload = {"q": query, "location": "United States", "gl": "us", "hl": "en"}
-
-        headers = {"X-API-KEY": SERPER_KEY or "", "Content-Type": "application/json"}
-
-        last_exc = None
-        async with aiohttp.ClientSession() as session:
-            for attempt in range(5):
-                try:
-                    async with session.post(
-                        "https://google.serper.dev/search",
-                        json=payload,
-                        headers=headers,
-                    ) as resp:
-                        text = await resp.text()
-                        try:
-                            results = json.loads(text)
-                        except Exception:
-                            return f"[Search] Failed to parse response for '{query}'."
-
-                        if "organic" not in results:
-                            return f"No results found for query: '{query}'. Use a less specific query."  # noqa: E501
-
-                        web_snippets = []
-                        for idx, page in enumerate(results.get("organic", []), start=1):
-                            date_published = (
-                                f"\nDate published: {page['date']}"
-                                if page.get("date")
-                                else ""
-                            )
-                            source = (
-                                f"\nSource: {page['source']}"
-                                if page.get("source")
-                                else ""
-                            )
-                            snippet = (
-                                f"\n{page['snippet']}" if page.get("snippet") else ""
-                            )
-                            redacted_version = f"{idx}. [{page.get('title', '')}]({page.get('link', '')}){date_published}{source}\n{snippet}"
-                            redacted_version = redacted_version.replace(
-                                "Your browser can't play this video.", ""
-                            )
-                            web_snippets.append(redacted_version)
-
-                        content = (
-                            f"A Google search for '{query}' found {len(web_snippets)} results:\n\n## Web Results\n"
-                            + "\n\n".join(web_snippets)
-                        )
-                        return content
-                except Exception as e:
-                    last_exc = e
-                    await asyncio.sleep(0.5)
-                    continue
-
-        return f"Google search Timeout or error ({last_exc}); return None, Please try again later."  # noqa: E501
-
-    async def search_with_serp(self, query: str):
-        return await self.google_search_with_serp(query)
-
-    async def call(self, params: str | dict, **kwargs) -> str:  # type: ignore[override]
+        Returns:
+            List[Tuple[str]]: contain (name, description)
+        """
         try:
-            query = params["query"]
-        except Exception:
-            return "[Search] Invalid request format: Input must be a JSON object containing 'query' field"
+            connection = pymysql.connect(host=HOST, user=USER, password=PASSWORD,
+                                         database=DATABASE, charset='utf8mb4')
+            cursor = connection.cursor()
 
-        if isinstance(query, str):
-            return await self.search_with_serp(query)
+            # 使用参数化查询防止SQL注入
+            query = f"""
+            SELECT name, description
+            FROM {TABLE_NAME}
+            where selection_evidence != ''
+            """
 
-        assert isinstance(query, list)
-        tasks = [self.search_with_serp(q) for q in query]
-        responses = await asyncio.gather(*tasks)
-        return "\n=======\n".join(responses)
+            cursor.execute(query, [])
+            results = cursor.fetchall()
+            results = [{"name": row[0], "description": row[1]} for row in results]
+            return json.dumps(results)
+        except pymysql.Error as e:
+            print(f"数据库查询错误: {e}")
+            return f'ERROR: {e}'
+        finally:
+            if 'connection' in locals():
+                connection.close()
+
+if __name__ == '__main__':
+    tool = GetAllCircuitSummaries()
+    result = tool.call()
+    print(result)
