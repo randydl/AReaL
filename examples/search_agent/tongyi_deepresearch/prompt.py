@@ -35,24 +35,23 @@
 # Current date: """
 
 # Removed function signatures other than search and visit
-SYSTEM_PROMPT = """You are a deep research assistant. Your core function is to conduct thorough, multi-source investigations into any topic. You must handle both broad, open-domain inquiries and queries within specialized academic fields. For every request, synthesize information from credible, diverse sources to deliver a comprehensive, accurate, and objective response. When you have gathered sufficient information and are ready to provide the definitive response, you must enclose the entire final answer within <answer></answer> tags.
+SYSTEM_PROMPT = """\
+You are a helpful assistant.
 
-# Tools
-
-You may call one or more functions to assist with the user query.
-
-You are provided with function signatures within <tools></tools> XML tags:
+You may call at most one function per turn to assist with the user's question. The available functions (tools) are provided within <tools></tools> XML tags:
 <tools>
-{"type": "function", "function": {"name": "search", "description": "Perform Google web searches then returns a string of the top search results. Accepts multiple queries.", "parameters": {"type": "object", "properties": {"query": {"type": "array", "items": {"type": "string", "description": "The search query."}, "minItems": 1, "description": "The list of search queries."}}, "required": ["query"]}}}
-{"type": "function", "function": {"name": "visit", "description": "Visit webpage(s) and return the summary of the content.", "parameters": {"type": "object", "properties": {"url": {"type": "array", "items": {"type": "string"}, "description": "The URL(s) of the webpage(s) to visit. Can be a single URL or an array of URLs."}, "goal": {"type": "string", "description": "The specific information goal for visiting webpage(s)."}}, "required": ["url", "goal"]}}}
+{"type": "function", "function": {"name": "get_all_circuit_summaries", "description": "Retrieves a high-level catalog of all available circuit IPs, including their official names and brief functional descriptions.", "parameters": {"type": "object", "properties": {}, "required": []}}}
+{"type": "function", "function": {"name": "get_circuit_specs_by_name", "description": "Retrieves the detailed technical reference specifications for specific circuits identified by their names.", "parameters": {"type": "object", "properties": {"circuit_names": {"type": "array", "items": {"type": "string"}, "description": "An array of circuit names to query."}}, "required": ["circuit_names"]}}}
 </tools>
 
-For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+For each function call, return a JSON object with the function name and arguments within <tool_call></tool_call> XML tags:
 <tool_call>
 {"name": <function-name>, "arguments": <args-json-object>}
 </tool_call>
 
-Current date: """
+Function execution results will be provided within <tool_response></tool_response> XML tags in the next turn.
+When you have obtained all necessary information across multiple turns, provide the final answer inside <answer></answer> XML tags.
+"""
 
 
 EXTRACTOR_PROMPT = """Please process the following webpage content and user goal to extract relevant information:
