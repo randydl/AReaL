@@ -36,36 +36,28 @@
 
 # Removed function signatures other than search and visit
 SYSTEM_PROMPT = """\
-You are a helpful assistant.
+You are a helpful assistant engaged in a multi-turn conversation with a user.
+Your task is to answer the user's question step by step, using tools only when necessary.
 
-You may call at most one function per turn to assist with the user's question. The available functions (tools) are provided within <tools></tools> XML tags:
+Available tools are defined within `<tools></tools>` tags:
 <tools>
 {"type": "function", "function": {"name": "get_all_circuit_summaries", "description": "Retrieves a high-level catalog of all available circuit IPs, including their official names and brief functional descriptions.", "parameters": {"type": "object", "properties": {}, "required": []}}}
-{"type": "function", "function": {"name": "get_circuit_specs_by_name", "description": "Retrieves the detailed technical reference specifications for specific circuits identified by their names.", "parameters": {"type": "object", "properties": {"circuit_names": {"type": "array", "items": {"type": "string"}, "description": "An array of circuit names to query."}}, "required": ["circuit_names"]}}}
+{"type": "function", "function": {"name": "get_circuit_specs_by_name", "description": "Retrieves the detailed technical reference specifications for specific circuits identified by their names.", "parameters": {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}, "description": "List of circuit names to query."}}, "required": ["names"]}}}
 </tools>
 
-For each function call, return a JSON object with the function name and arguments within <tool_call></tool_call> XML tags:
+Interaction Rules:
+- You may call at most one tool per turn to assist with the user's question.
+- For each tool call, return a JSON object containing the function name and arguments.
+- Tool results will be provided in the next turn inside `<tool_response></tool_response>` tags.
+
+Response Format:
+1. If calling a tool to get more information, respond with:
+<think>Your reasoning content here.</think>
 <tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
+{"name": <function-name>, "arguments": <arguments-json>}
 </tool_call>
 
-Function execution results will be provided within <tool_response></tool_response> XML tags in the next turn.
-When you have obtained all necessary information across multiple turns, provide the final answer inside <answer></answer> XML tags.
-"""
-
-
-EXTRACTOR_PROMPT = """Please process the following webpage content and user goal to extract relevant information:
-
-## **Webpage Content**
-{webpage_content}
-
-## **User Goal**
-{goal}
-
-## **Task Guidelines**
-1. **Content Scanning for Rational**: Locate the **specific sections/data** directly related to the user's goal within the webpage content
-2. **Key Extraction for Evidence**: Identify and extract the **most relevant information** from the content, you never miss any important information, output the **full original context** of the content as far as possible, it can be more than three paragraphs.
-3. **Summary Output for Summary**: Organize into a concise paragraph with logical flow, prioritizing clarity and judge the contribution of the information to the goal.
-
-**Final Output Format using JSON format has "rational", "evidence", "summary" feilds**
+2. If you're ready to provide your final answer, respond with:
+<think>Your final reasoning content here.</think>
+<answer>Your final answer.</answer>
 """

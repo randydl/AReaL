@@ -27,7 +27,7 @@ class GetCircuitSpecsByName():
         "Retrieve the reference specification of circuits by name"
     )
 
-    def call(self, circuit_names) -> List[Tuple[str, str]]:
+    def call(self, names) -> List[Tuple[str, str]]:
         """Perform circuit information query.
 
         Args:
@@ -42,14 +42,14 @@ class GetCircuitSpecsByName():
             cursor = connection.cursor()
 
             # 使用参数化查询防止SQL注入
-            placeholders = ','.join(['%s'] * len(circuit_names))
+            placeholders = ','.join(['%s'] * len(names))
             query = f"""
             SELECT name, reference_specification
             FROM {TABLE_NAME}
             where selection_evidence != '' and name IN ({placeholders})
             """
 
-            cursor.execute(query, circuit_names)
+            cursor.execute(query, names)
             results = cursor.fetchall()
             results =  [{"name": row[0], "reference_specification": row[1]} for row in results]
             return json.dumps(results)

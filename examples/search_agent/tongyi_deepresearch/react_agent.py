@@ -4,7 +4,7 @@ import os
 import sys
 import time
 from pathlib import Path
-
+import numpy as np
 import json5
 from pydantic import BaseModel
 from qwen_agent.agents.fncall_agent import FnCallAgent
@@ -33,7 +33,44 @@ OBS_START = "<tool_response>"
 OBS_END = "\n</tool_response>"
 
 MAX_LLM_CALL_PER_RUN = int(os.getenv("MAX_LLM_CALL_PER_RUN", 100))
+import re
+import math
 
+
+def format_reward(text):
+    tags = ['<think>', '</think>', '<tool_call>', '</tool_call>', '<answer>', '</answer>']
+    patt = r'^\s*<think>.*?</think>\s*<(tool_call|answer)>.*?</\1>\s*$'
+    if sum([text.count(x) > 1 for x in tags]) > 0: return 0.0
+    return 1.0 if re.match(patt, text, re.S) else 0.0
+
+
+def cosine_reward(
+    result,
+    cosine_min_len_value_wrong=-0.5,
+    cosine_max_len_value_wrong=0.0,
+    cosine_min_len_value_correct=1.0,
+    cosine_max_len_value_correct=0.5,
+    cosine_max_len=100
+):
+    def cos_interp(t, T, minv, maxv):
+        return maxv - (maxv - minv) * (1 - math.cos(t * math.pi / T)) / 2
+
+    messages = result['messages']
+    answer = result['answer']
+    prediction = result['prediction']
+    num_turns = len([m for m in messages if m['role'] == 'assistant'])
+    num_turns = min(max(num_turns, 1), cosine_max_len)
+
+    is_correct = prediction.strip() == answer.strip()
+    if is_correct:
+        min_value = cosine_max_len_value_correct
+        max_value = cosine_min_len_value_correct
+    else:
+        min_value = cosine_max_len_value_wrong
+        max_value = cosine_min_len_value_wrong
+    reward = cos_interp(num_turns, cosine_max_len, min_value, max_value)
+
+    return reward
 
 class MultiTurnReactAgent(FnCallAgent):
     def __init__(
@@ -73,7 +110,6 @@ class MultiTurnReactAgent(FnCallAgent):
                 completion = await client.chat.completions.create(
                     messages=messages,
                     temperature=1.0,
-                    stop=["\n<tool_response>", "<tool_response>"],
                     max_completion_tokens=self.max_tokens_per_turn,
                 )
                 message = completion.choices[0].message
@@ -110,29 +146,18 @@ class MultiTurnReactAgent(FnCallAgent):
         completions = []
         round = 0
         while num_llm_calls_available > 0:
-            # Check whether time is reached
-            if time.time() - start_time > 150 * 60:  # 150 minutes in seconds
-                prediction = "No answer found after 2h30mins"
-                termination = "No answer found after 2h30mins"
-                result = {
-                    "question": question,
-                    "answer": answer,
-                    "messages": messages,
-                    "prediction": prediction,
-                    "termination": termination,
-                }
-                return result
             round += 1
             stats["turns"] += 1
             num_llm_calls_available -= 1
             completion, message = await self.call_server(client, messages)
             content = message.content
             completions.append(completion)
-            messages.append(message)
-            # print('>' * 100)
-            # print(stats)
-            # print(content)
-            # print('<' * 100)
+            messages.append(message.model_dump(exclude_none=True))
+            # if format_reward(content) < 1:
+            #     print('>' * 100)
+            #     print(stats)
+            #     print(content)
+            #     print('<' * 100)
             if "<tool_call>" in content and "</tool_call>" in content:
                 tool_call = content.split("<tool_call>")[1].split("</tool_call>")[0]
                 try:
@@ -183,7 +208,7 @@ class MultiTurnReactAgent(FnCallAgent):
                 completion, message = await self.call_server(client, messages)
                 completions.append(completion)
                 content = message.content
-                messages.append(message)
+                messages.append(message.model_dump(exclude_none=True))
                 if "<answer>" in content and "</answer>" in content:
                     prediction = content.split("<answer>")[1].split("</answer>")[0]
                     termination = "generate an answer as token limit reached"
@@ -247,15 +272,16 @@ class MultiTurnReactAgent(FnCallAgent):
         self,
         result: dict[str, str],
     ):
-        pred_answer = result["prediction"].strip()
-        ground_truth = result["answer"].strip()
-        if pred_answer == ground_truth:
-            reward = 1.0
-            print('>' * 100)
-            print(f"reward: {reward}")
-            print('<' * 100)
-        else:
-            reward = 0.0
+        messages = result['messages']
+        answer = result['answer']
+        prediction = result['prediction']
+        reward_acc = 1.0 if prediction.strip() == answer.strip() else 0.0
+        reward_format = np.mean([format_reward(m['content']) for m in messages if m['role'] == 'assistant'])
+        reward_cosine = cosine_reward(result, cosine_max_len=self.max_llm_calls_per_run)
+        reward = np.mean([reward_format, reward_acc, reward_cosine])
+        result["stats"]['acc_reward'] = reward_acc
+        result["stats"]['format_reward'] = reward_format
+        result["stats"]['cosine_reward'] = reward_cosine
         return reward
 
     async def make_trajectory(

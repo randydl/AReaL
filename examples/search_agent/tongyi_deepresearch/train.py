@@ -62,6 +62,7 @@ class TongyiDeepResearchReactWorkflow(RolloutWorkflow):
         # Initialize judge engine from config if provided
         self._owns_judge_engine = False
         self.judge_engine = None
+        judge_engine_config = None
         if judge_engine_config is not None:
             self.judge_engine = RemoteSGLangEngine(judge_engine_config)
             self.judge_engine.config.max_head_offpolicyness = int(1e12)
