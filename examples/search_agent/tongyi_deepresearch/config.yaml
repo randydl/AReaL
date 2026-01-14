@@ -122,7 +122,7 @@ vllm:
 
 # datasets
 train_dataset:
-  batch_size: 128
+  batch_size: 8
   shuffle: true
   pin_memory: true
   type: rl
@@ -158,8 +158,8 @@ stats_logger:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  wandb:
-    mode: disabled
+  tensorboard:
+    path: ${cluster.fileroot}
 
 perf_tracer:
   experiment_name: ${experiment_name}
@@ -180,4 +180,4 @@ judge_engine:
 
 max_llm_calls_per_run: 100
 max_tokens_per_trajectory: 27648
-log_agent_stats: false
+log_agent_stats: true
