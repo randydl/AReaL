@@ -10,7 +10,7 @@ cluster:
     nfs_record_root: /nas_train/app.e0016372/train/experiments/name_resolve
 seed: 1
 enable_offload: false
-total_train_epochs: 1
+total_train_epochs: 3
 total_train_steps: null
 tokenizer_path: ${actor.path}
 allocation_mode: sglang:d4p1t1+d4p1t1
