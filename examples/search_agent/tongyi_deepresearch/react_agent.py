@@ -1,5 +1,6 @@
 import json5
 import logging
+from transformers import AutoTokenizer
 from prompt import SYSTEM_PROMPT
 from tool_visit import GetCircuitSpecsByName
 from tool_search import GetAllCircuitSummaries
@@ -20,15 +21,24 @@ class ReactInferenceAgent:
         system_prompt=SYSTEM_PROMPT,
         tools=[GetAllCircuitSummaries(), GetCircuitSpecsByName()],
         max_llm_calls=10,
-        max_completion_tokens=8192,
+        max_total_tokens=32768,
     ):
         self.client = client
         self.system_prompt = system_prompt
         self.max_llm_calls = max_llm_calls
-        self.max_completion_tokens = max_completion_tokens
-
+        self.max_total_tokens = max_total_tokens
         self.tool_map = {tool.name: tool for tool in tools}
+        self.tokenizer = AutoTokenizer.from_pretrained('/nas_train/app.e0016372/models/Qwen3-8B')
 
+    def count_tokens(self, messages):
+        message_strs = []
+        for msg in messages:
+            message_strs.append(
+                f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
+            )
+        message_strs.append("<|im_start|>assistant\n")
+        prompt_token_ids = self.tokenizer.encode("".join(message_strs))
+        return len(prompt_token_ids)
     # --------------------------------------------------
     # Public entry
     # --------------------------------------------------
@@ -43,27 +53,34 @@ class ReactInferenceAgent:
             content = message['content']
             messages.append(message)
 
+            token_count = self.count_tokens(messages)
+            if token_count > self.max_total_tokens:
+                break
+
             # 1️⃣ Tool call
             if "<tool_call>" in content:
                 tool_result = self._handle_tool_call(content)
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": f"<tool_response>\n{tool_result}\n</tool_response>",
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": f"<tool_response>\n{tool_result}\n</tool_response>",
+                })
                 continue
 
             # 2️⃣ Final answer
             if self._has_answer(content):
-                return content, messages
+                answer = self._extract_answer(content)
+                return answer, messages
 
         # 3️⃣ Fallback
-        messages.append(
-            {"role": "user", "content": self.FINAL_ANSWER_PROMPT}
-        )
+        messages.append({
+            "role": "user",
+            "content": self.FINAL_ANSWER_PROMPT
+        })
         message = self._call_llm(messages)
-        return message['content'], messages
+        content = message['content']
+        messages.append(message)
+        answer = self._extract_answer(content)
+        return answer, messages
 
     # --------------------------------------------------
     # LLM
@@ -74,7 +91,7 @@ class ReactInferenceAgent:
                 completion = self.client.chat.completions.create(
                     messages=messages,
                     # temperature=1.0,
-                    max_completion_tokens=self.max_completion_tokens,
+                    # max_completion_tokens=self.max_completion_tokens,
                 )
                 message = completion.choices[0].message
                 if not message:
