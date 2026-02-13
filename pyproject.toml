@@ -54,7 +54,7 @@ dependencies = [
     "openai-agents",
     "anthropic",
     "claude-agent-sdk",
-    "litellm[proxy]>=1.81.3",
+    # "litellm[proxy]>=1.81.3",
     "openhands",
     "langchain",
     "langchain-openai",
